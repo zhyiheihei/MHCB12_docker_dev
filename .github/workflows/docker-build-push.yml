@@ -49,7 +49,7 @@ jobs:
           echo "docker_username=$DOCKER_USERNAME" >> $GITHUB_OUTPUT
           
           # 镜像名
-          DOCKER_IMAGE_NAME=${{ vars.DOCKER_IMAGE_NAME }}
+          DOCKER_IMAGE_NAME=${{ vars.DOCKER_IMAGE_NAME || 'mhcb12' }}
           echo "docker_image_name=$DOCKER_IMAGE_NAME" >> $GITHUB_OUTPUT
           
           # 检查是否有SSH密钥
@@ -65,13 +65,25 @@ jobs:
             exit 1
           fi
 
-      # 配置SSH代理（仅当提供了密钥时，失败时继续执行）
+      # 配置SSH代理（更可靠的密钥处理）
       - name: Setup SSH Agent
+        id: ssh-agent
         if: ${{ steps.set-vars.outputs.has_ssh == 'true' }}
         uses: webfactory/ssh-agent@v0.8.0
-        continue-on-error: true
         with:
           ssh-private-key: ${{ secrets.SSH_PRIVATE_KEY }}
+      
+      # 验证SSH代理设置（添加详细诊断信息）
+      - name: Verify SSH Setup
+        if: ${{ steps.set-vars.outputs.has_ssh == 'true' }}
+        run: |
+          echo "SSH_AUTH_SOCK: $SSH_AUTH_SOCK"
+          echo "SSH配置信息:"
+          ssh-add -L || echo "没有可用的SSH密钥"
+          echo "尝试连接GitHub测试SSH..."
+          ssh -T git@github.com || true
+          echo "尝试连接阿里云代码平台..."
+          ssh -T git@codeup.aliyun.com || echo "阿里云代码平台连接失败（预期行为）"
 
       # 构建Docker镜像
       - name: Build Docker Image
@@ -80,13 +92,17 @@ jobs:
           LOCAL_IMAGE=${{ steps.set-vars.outputs.docker_username }}/${{ steps.set-vars.outputs.docker_image_name }}
           TAG_NAME=${{ steps.determine-tags.outputs.tag_name }}
           
-          # SSH参数（如果有且环境变量存在）
+          # SSH参数（优化配置，确保密钥正确传递）
           SSH_ARG=""
           if [ "${{ steps.set-vars.outputs.has_ssh }}" = "true" ] && [ -n "$SSH_AUTH_SOCK" ]; then
             SSH_ARG="--ssh default=$SSH_AUTH_SOCK"
-            echo "使用SSH代理进行构建"
+            echo "使用SSH代理进行构建: $SSH_AUTH_SOCK"
+            # 确保正确设置构建上下文
+            export DOCKER_BUILDKIT=1
+            echo "DOCKER_BUILDKIT已启用"
           else
             echo "未使用SSH代理进行构建"
+            echo "注意：如果需要克隆私有仓库，请确保提供了有效的SSH_PRIVATE_KEY密钥"
           fi
           
           # 阿里云ACR镜像名称（如果配置了）

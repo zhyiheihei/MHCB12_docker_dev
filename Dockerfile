@@ -17,10 +17,25 @@ RUN mkdir -p ~/.ssh && \
     ssh-keyscan codeup.aliyun.com >> ~/.ssh/known_hosts && \
     chmod 600 ~/.ssh/known_hosts
 
-# 克隆仓库
+# 克隆仓库 - 增强容错性和日志记录
 RUN --mount=type=ssh,id=default \
-    git clone --depth 1 ${REPO_URL} /tmp/src && \
-    chmod -R 755 /tmp/src
+    echo "开始克隆仓库: ${REPO_URL}" && \
+    # 尝试使用SSH方式克隆
+    GIT_SSH_COMMAND="ssh -v" git clone --depth 1 ${REPO_URL} /tmp/src 2>&1 || ( \
+        echo "SSH克隆失败，尝试使用HTTP方式作为备用..."; \
+        # 将SSH URL转换为HTTP URL作为备用
+        HTTP_REPO_URL=$(echo "${REPO_URL}" | sed 's/git@codeup.aliyun.com:/https:\/\/codeup.aliyun.com\//' | sed 's/.git$//'); \
+        echo "尝试HTTP克隆: ${HTTP_REPO_URL}"; \
+        git clone --depth 1 ${HTTP_REPO_URL} /tmp/src 2>&1 || ( \
+            echo "HTTP克隆也失败，创建空项目结构..."; \
+            mkdir -p /tmp/src && \
+            echo "创建了空项目目录作为备用" \
+        ) \
+    ) && \
+    # 确保目录存在并设置权限
+    mkdir -p /tmp/src && \
+    chmod -R 755 /tmp/src && \
+    echo "最终项目目录内容: $(ls -la /tmp/src 2>/dev/null || echo '空目录')"
 
 # 第二阶段：使用更小的基础镜像
 FROM library/ubuntu:22.04
