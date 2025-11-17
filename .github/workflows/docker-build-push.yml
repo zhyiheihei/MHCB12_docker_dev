@@ -133,7 +133,6 @@ jobs:
         run: |
           # 登录阿里云ACR
           echo "${{ secrets.ALIYUN_ACR_PASSWORD }}" | docker login registry.cn-hangzhou.aliyuncs.com -u ${{ secrets.ALIYUN_ACR_USERNAME }} --password-stdin
-          
           # 推送镜像
           ACR_IMAGE="registry.cn-hangzhou.aliyuncs.com/${{ vars.ALIYUN_ACR_NAMESPACE }}/${{ steps.set-vars.outputs.docker_image_name }}"
           echo "推送镜像到阿里云ACR: $ACR_IMAGE:${{ steps.determine-tags.outputs.tag_name }}"
