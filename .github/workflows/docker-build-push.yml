@@ -23,6 +23,7 @@ on:
 jobs:
   build-and-push:
     runs-on: ubuntu-latest
+    environment: docker-builder  # 指定使用docker-builder环境的密钥
     
     steps:
       - name: Checkout
