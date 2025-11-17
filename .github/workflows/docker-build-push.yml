@@ -1,15 +1,10 @@
-# 说明：请在仓库 Settings > Secrets and variables 中添加以下项
-# Secrets（仅限 Actions 可见，存放敏感凭据）：
-# - SSH_PRIVATE_KEY         : 私有仓库的 SSH 私钥（用于 webfactory/ssh-agent）
-# - DOCKER_PASSWORD         : Docker Hub 的访问令牌/密码
-# - ALIYUN_ACR_USERNAME     : 阿里云 ACR 登录用户名（若为子账号）
-# - ALIYUN_ACR_PASSWORD     : 阿里云 ACR 登录密码/密码
-#
-# Variables（非敏感，可在 Actions 日志中显示，便于复用）：
-# - DOCKER_USERNAME         : Docker Hub 用户名（用于镜像命名和登录）
-# - DOCKER_IMAGE_NAME       : 镜像名（例如 mhcb12）
-# - ALIYUN_ACR_NAMESPACE    : 阿里云 ACR 命名空间（例如 my-namespace）
-# - REPO_URL (可选)         : 构建时的仓库地址（可用于 --build-arg）
+# 简化版Docker镜像构建和推送工作流
+# 必要配置：在仓库Settings > Secrets and variables中添加以下项
+# Secrets:
+# - DOCKER_PASSWORD: Docker Hub访问令牌
+# 可选配置（根据需要添加）:
+# - DOCKER_USERNAME: Docker Hub用户名（不设置时使用仓库所有者）
+# - DOCKER_IMAGE_NAME: 镜像名（不设置时使用仓库名）
 
 name: Build and Push Docker Image
 
@@ -29,136 +24,123 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # 根据触发事件类型确定 Docker 镜像标签
+      # 确定Docker标签
       - name: Determine Docker tags
         id: determine-tags
         run: |
-          # 如果是 release 事件，使用版本号作为标签
+          # 根据事件类型设置标签
           if [ "${{ github.event_name }}" = "release" ]; then
             TAG_NAME=${GITHUB_REF#refs/tags/}
-            echo "::notice::Building RELEASE version: $TAG_NAME"
+            echo "构建发布版本: $TAG_NAME"
             echo "tag_name=$TAG_NAME" >> $GITHUB_OUTPUT
             echo "push_latest=true" >> $GITHUB_OUTPUT
-          # 如果是 push 事件，使用 latest 标签
           else
-            echo "::notice::Building DEV version with latest tag"
+            echo "构建开发版本，使用latest标签"
             echo "tag_name=latest" >> $GITHUB_OUTPUT
             echo "push_latest=false" >> $GITHUB_OUTPUT
           fi
 
-      # 校验必要的 Secrets/Variables，设置 outputs 供后续步骤使用
-      - name: Validate required secrets and variables
-        id: validate
+      # 设置环境变量，简化版
+      - name: Set environment variables
+        id: set-vars
         run: |
-          MISSING=false
-
-          # 检查是否有 SSH 私钥（可选）
-          if [ -z "${{ secrets.SSH_PRIVATE_KEY }}" ]; then
-            echo "::notice::Secret SSH_PRIVATE_KEY is not set. SSH-based repo clone will be skipped."
-            echo "has_ssh=false" >> $GITHUB_OUTPUT
-          else
-            echo "has_ssh=true" >> $GITHUB_OUTPUT
+          # Docker用户名（优先使用变量，否则使用仓库所有者）
+          DOCKER_USERNAME=${{ vars.DOCKER_USERNAME || github.repository_owner }}
+          echo "docker_username=$DOCKER_USERNAME" >> $GITHUB_OUTPUT
+          
+          # 镜像名（优先使用变量，否则使用仓库名）
+          REPO_NAME=$(echo "${{ github.repository }}" | awk -F/ '{print $2}')
+          DOCKER_IMAGE_NAME=${{ vars.DOCKER_IMAGE_NAME || REPO_NAME }}
+          echo "docker_image_name=$DOCKER_IMAGE_NAME" >> $GITHUB_OUTPUT
+          
+          # 检查是否有SSH密钥
+          HAS_SSH=false
+          if [ -n "${{ secrets.SSH_PRIVATE_KEY }}" ]; then
+            HAS_SSH=true
           fi
-
-          # 确定 DOCKER_USERNAME（优先 vars，否则使用仓库 owner 作为默认）
-          if [ -n "${{ vars.DOCKER_USERNAME }}" ]; then
-            echo "docker_username=${{ vars.DOCKER_USERNAME }}" >> $GITHUB_OUTPUT
-          else
-            echo "::notice::Variable DOCKER_USERNAME not set. Falling back to repository owner."
-            echo "docker_username=${{ github.repository_owner }}" >> $GITHUB_OUTPUT
-          fi
-
-          # 确定 DOCKER_IMAGE_NAME（优先 vars，否则使用仓库名作为默认）
-          if [ -n "${{ vars.DOCKER_IMAGE_NAME }}" ]; then
-            echo "docker_image_name=${{ vars.DOCKER_IMAGE_NAME }}" >> $GITHUB_OUTPUT
-          else
-            REPO_NAME=$(echo "${{ github.repository }}" | awk -F/ '{print $2}')
-            echo "::notice::Variable DOCKER_IMAGE_NAME not set. Falling back to repository name: $REPO_NAME"
-            echo "docker_image_name=$REPO_NAME" >> $GITHUB_OUTPUT
-          fi
-
-          # 检查 Docker 密钥（推送到 Docker Hub 必需）
+          echo "has_ssh=$HAS_SSH" >> $GITHUB_OUTPUT
+          
+          # 验证必要的密钥
           if [ -z "${{ secrets.DOCKER_PASSWORD }}" ]; then
-            echo "::error::Secret DOCKER_PASSWORD is not set. Add Docker Hub access token as DOCKER_PASSWORD."
-            MISSING=true
-          fi
-
-          # 如果设置了阿里云 ACR 命名空间，则要求 ACR 密码
-          if [ -n "${{ vars.ALIYUN_ACR_NAMESPACE }}" ] && [ -z "${{ secrets.ALIYUN_ACR_PASSWORD }}" ]; then
-            echo "::error::You configured ALIYUN_ACR_NAMESPACE but ALIYUN_ACR_PASSWORD is not set."
-            MISSING=true
-          fi
-
-          if [ "$MISSING" = "true" ]; then
-            echo "One or more required secrets/variables are missing. See errors above."
+            echo "错误：缺少DOCKER_PASSWORD密钥，请在GitHub仓库设置中添加Docker Hub访问令牌"
             exit 1
           fi
 
-      # 配置 SSH 代理用于私有仓库克隆（仅当 validate 输出 has_ssh 为 true 时执行）
+      # 配置SSH代理（仅当提供了密钥时）
       - name: Setup SSH Agent
-        if: ${{ steps.validate.outputs.has_ssh == 'true' }}
+        if: ${{ steps.set-vars.outputs.has_ssh == 'true' }}
         uses: webfactory/ssh-agent@v0.8.0
         with:
           ssh-private-key: ${{ secrets.SSH_PRIVATE_KEY }}
 
-      # 构建 Docker 镜像，同时为 Docker Hub 和阿里云 ACR 打标签
+      # 构建Docker镜像
       - name: Build Docker Image
         run: |
-          # 从校验步骤输出取值（已处理默认值）
-          LOCAL_IMAGE=${{ steps.validate.outputs.docker_username }}/${{ steps.validate.outputs.docker_image_name }}
-          ACR_IMAGE=registry.cn-hangzhou.aliyuncs.com/${{ vars.ALIYUN_ACR_NAMESPACE }}/${{ steps.validate.outputs.docker_image_name }}
-
-          # 根据是否有 SSH 私钥决定是否加入 --ssh 参数
+          # 设置基础变量
+          LOCAL_IMAGE=${{ steps.set-vars.outputs.docker_username }}/${{ steps.set-vars.outputs.docker_image_name }}
+          TAG_NAME=${{ steps.determine-tags.outputs.tag_name }}
+          
+          # SSH参数（如果有）
           SSH_ARG=""
-          if [ "${{ steps.validate.outputs.has_ssh }}" = "true" ]; then
+          if [ "${{ steps.set-vars.outputs.has_ssh }}" = "true" ]; then
             SSH_ARG="--ssh default=$SSH_AUTH_SOCK"
           fi
-
-          # 构建镜像并同时标记两个仓库的标签
+          
+          # 阿里云ACR镜像名称（如果配置了）
+          ACR_NAMESPACE=${{ vars.ALIYUN_ACR_NAMESPACE || '' }}
+          ACR_IMAGE=""
+          if [ -n "$ACR_NAMESPACE" ]; then
+            ACR_IMAGE="registry.cn-hangzhou.aliyuncs.com/$ACR_NAMESPACE/${{ steps.set-vars.outputs.docker_image_name }}"
+          fi
+          
+          # 构建镜像
+          echo "构建镜像: $LOCAL_IMAGE:$TAG_NAME"
           docker build $SSH_ARG \
             --build-arg REPO_URL="${{ vars.REPO_URL || 'git@codeup.aliyun.com:dooya/MHCB12.git' }}" \
-            -t $LOCAL_IMAGE:${{ steps.determine-tags.outputs.tag_name }} \
-            -t $ACR_IMAGE:${{ steps.determine-tags.outputs.tag_name }} \
+            -t $LOCAL_IMAGE:$TAG_NAME \
+            ${ACR_IMAGE:+-t $ACR_IMAGE:$TAG_NAME} \
             .
-
-          # Release 版本时，额外添加 latest 标签
+          
+          # 如果是Release版本，添加latest标签
           if [ "${{ steps.determine-tags.outputs.push_latest }}" = "true" ]; then
-            docker tag $LOCAL_IMAGE:${{ steps.determine-tags.outputs.tag_name }} $LOCAL_IMAGE:latest
-            docker tag $ACR_IMAGE:${{ steps.determine-tags.outputs.tag_name }} $ACR_IMAGE:latest
+            echo "添加latest标签"
+            docker tag $LOCAL_IMAGE:$TAG_NAME $LOCAL_IMAGE:latest
+            if [ -n "$ACR_IMAGE" ]; then
+              docker tag $ACR_IMAGE:$TAG_NAME $ACR_IMAGE:latest
+            fi
           fi
 
-      # 登录 Docker Hub
-      - name: Login to Docker Hub
-        uses: docker/login-action@v2
-        with:
-          username: ${{ steps.validate.outputs.docker_username }}
-          password: ${{ secrets.DOCKER_PASSWORD }}
-
-      # 推送镜像到 Docker Hub
+      # 登录Docker Hub并推送镜像
       - name: Push to Docker Hub
         run: |
-          docker push ${{ steps.validate.outputs.docker_username }}/${{ steps.validate.outputs.docker_image_name }}:${{ steps.determine-tags.outputs.tag_name }}
+          # 登录Docker Hub
+          echo "${{ secrets.DOCKER_PASSWORD }}" | docker login -u ${{ steps.set-vars.outputs.docker_username }} --password-stdin
           
+          # 推送镜像
+          IMAGE_NAME=${{ steps.set-vars.outputs.docker_username }}/${{ steps.set-vars.outputs.docker_image_name }}
+          echo "推送镜像: $IMAGE_NAME:${{ steps.determine-tags.outputs.tag_name }}"
+          docker push $IMAGE_NAME:${{ steps.determine-tags.outputs.tag_name }}
+          
+          # 推送latest标签（仅发布版本）
           if [ "${{ steps.determine-tags.outputs.push_latest }}" = "true" ]; then
-            docker push ${{ steps.validate.outputs.docker_username }}/${{ steps.validate.outputs.docker_image_name }}:latest
+            echo "推送latest标签"
+            docker push $IMAGE_NAME:latest
           fi
 
-      # 登录阿里云 ACR
-      - name: Login to Aliyun ACR
-        if: ${{ vars.ALIYUN_ACR_NAMESPACE != '' }}
-        uses: docker/login-action@v2
-        with:
-          registry: registry.cn-hangzhou.aliyuncs.com
-          username: ${{ secrets.ALIYUN_ACR_USERNAME }}
-          password: ${{ secrets.ALIYUN_ACR_PASSWORD }}
-
-      # 推送镜像到阿里云 ACR（仅当配置了命名空间）
+      # 推送镜像到阿里云ACR（如果配置了）
       - name: Push to Aliyun ACR
         if: ${{ vars.ALIYUN_ACR_NAMESPACE != '' }}
         run: |
-          ACR_IMAGE=registry.cn-hangzhou.aliyuncs.com/${{ vars.ALIYUN_ACR_NAMESPACE }}/${{ steps.validate.outputs.docker_image_name }}
+          # 登录阿里云ACR
+          echo "${{ secrets.ALIYUN_ACR_PASSWORD }}" | docker login registry.cn-hangzhou.aliyuncs.com -u ${{ secrets.ALIYUN_ACR_USERNAME }} --password-stdin
+          
+          # 推送镜像
+          ACR_IMAGE="registry.cn-hangzhou.aliyuncs.com/${{ vars.ALIYUN_ACR_NAMESPACE }}/${{ steps.set-vars.outputs.docker_image_name }}"
+          echo "推送镜像到阿里云ACR: $ACR_IMAGE:${{ steps.determine-tags.outputs.tag_name }}"
           docker push $ACR_IMAGE:${{ steps.determine-tags.outputs.tag_name }}
           
+          # 推送latest标签（仅发布版本）
           if [ "${{ steps.determine-tags.outputs.push_latest }}" = "true" ]; then
+            echo "推送latest标签到阿里云ACR"
             docker push $ACR_IMAGE:latest
           fi
