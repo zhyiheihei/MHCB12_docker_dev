@@ -65,25 +65,41 @@ jobs:
             exit 1
           fi
 
-      # 配置SSH代理（更可靠的密钥处理）
+      # 配置SSH代理（添加错误处理和容错机制）
       - name: Setup SSH Agent
         id: ssh-agent
         if: ${{ steps.set-vars.outputs.has_ssh == 'true' }}
         uses: webfactory/ssh-agent@v0.8.0
+        continue-on-error: true
         with:
           ssh-private-key: ${{ secrets.SSH_PRIVATE_KEY }}
       
-      # 验证SSH代理设置（添加详细诊断信息）
+      # 验证SSH代理设置（增强错误处理）
       - name: Verify SSH Setup
+        id: verify-ssh
         if: ${{ steps.set-vars.outputs.has_ssh == 'true' }}
         run: |
-          echo "SSH_AUTH_SOCK: $SSH_AUTH_SOCK"
-          echo "SSH配置信息:"
-          ssh-add -L || echo "没有可用的SSH密钥"
-          echo "尝试连接GitHub测试SSH..."
-          ssh -T git@github.com || true
-          echo "尝试连接阿里云代码平台..."
-          ssh -T git@codeup.aliyun.com || echo "阿里云代码平台连接失败（预期行为）"
+          echo "检查SSH代理状态..."
+          if [ -n "$SSH_AUTH_SOCK" ]; then
+            echo "SSH_AUTH_SOCK 可用: $SSH_AUTH_SOCK"
+            # 尝试列出密钥，但不使失败影响工作流
+            ssh-add -L > /dev/null 2>&1
+            if [ $? -eq 0 ]; then
+              echo "SSH密钥加载成功"
+              echo "has_valid_ssh=true" >> $GITHUB_OUTPUT
+            else
+              echo "警告: SSH密钥加载失败，但将继续执行工作流"
+              echo "has_valid_ssh=false" >> $GITHUB_OUTPUT
+            fi
+          else
+            echo "警告: SSH_AUTH_SOCK 环境变量不存在"
+            echo "has_valid_ssh=false" >> $GITHUB_OUTPUT
+          fi
+          
+          # 为可能的库错误提供额外信息
+          echo "系统环境信息:"
+          ssh -V || echo "无法获取SSH版本"
+          openssl version || echo "无法获取OpenSSL版本"
 
       # 构建Docker镜像
       - name: Build Docker Image
@@ -92,17 +108,29 @@ jobs:
           LOCAL_IMAGE=${{ steps.set-vars.outputs.docker_username }}/${{ steps.set-vars.outputs.docker_image_name }}
           TAG_NAME=${{ steps.determine-tags.outputs.tag_name }}
           
-          # SSH参数（优化配置，确保密钥正确传递）
+          # SSH参数（改进错误处理和验证）
           SSH_ARG=""
-          if [ "${{ steps.set-vars.outputs.has_ssh }}" = "true" ] && [ -n "$SSH_AUTH_SOCK" ]; then
+          
+          # 检查是否有SSH配置且密钥有效
+          HAS_VALID_SSH=false
+          if [ "${{ steps.verify-ssh.outputs.has_valid_ssh }}" = "true" ]; then
+            HAS_VALID_SSH=true
+          elif [ "${{ steps.set-vars.outputs.has_ssh }}" = "true" ] && [ -n "$SSH_AUTH_SOCK" ]; then
+            # 后备检查，即使验证失败也尝试使用
+            echo "尝试使用SSH代理，尽管验证可能失败"
+            HAS_VALID_SSH=true
+          fi
+          
+          if [ "$HAS_VALID_SSH" = "true" ]; then
             SSH_ARG="--ssh default=$SSH_AUTH_SOCK"
-            echo "使用SSH代理进行构建: $SSH_AUTH_SOCK"
+            echo "尝试使用SSH代理进行构建"
             # 确保正确设置构建上下文
             export DOCKER_BUILDKIT=1
             echo "DOCKER_BUILDKIT已启用"
           else
             echo "未使用SSH代理进行构建"
-            echo "注意：如果需要克隆私有仓库，请确保提供了有效的SSH_PRIVATE_KEY密钥"
+            echo "注意：由于SSH密钥加载错误(libcrypto)，将使用Dockerfile中的回退机制"
+            # 对于构建上下文，我们依赖于Dockerfile中已添加的备用克隆方法
           fi
           
           # 阿里云ACR镜像名称（如果配置了）
