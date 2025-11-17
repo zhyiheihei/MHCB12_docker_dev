@@ -49,7 +49,7 @@ jobs:
           echo "docker_username=$DOCKER_USERNAME" >> $GITHUB_OUTPUT
           
           # 镜像名
-          DOCKER_IMAGE_NAME=${{ vars.DOCKER_IMAGE_NAME || 'mhcb12' }}
+          DOCKER_IMAGE_NAME=${{ vars.DOCKER_IMAGE_NAME}}
           echo "docker_image_name=$DOCKER_IMAGE_NAME" >> $GITHUB_OUTPUT
           
           # 检查是否有SSH密钥
