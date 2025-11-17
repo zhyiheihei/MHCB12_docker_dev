@@ -65,10 +65,11 @@ jobs:
             exit 1
           fi
 
-      # 配置SSH代理（仅当提供了密钥时）
+      # 配置SSH代理（仅当提供了密钥时，失败时继续执行）
       - name: Setup SSH Agent
         if: ${{ steps.set-vars.outputs.has_ssh == 'true' }}
         uses: webfactory/ssh-agent@v0.8.0
+        continue-on-error: true
         with:
           ssh-private-key: ${{ secrets.SSH_PRIVATE_KEY }}
 
@@ -79,10 +80,13 @@ jobs:
           LOCAL_IMAGE=${{ steps.set-vars.outputs.docker_username }}/${{ steps.set-vars.outputs.docker_image_name }}
           TAG_NAME=${{ steps.determine-tags.outputs.tag_name }}
           
-          # SSH参数（如果有）
+          # SSH参数（如果有且环境变量存在）
           SSH_ARG=""
-          if [ "${{ steps.set-vars.outputs.has_ssh }}" = "true" ]; then
+          if [ "${{ steps.set-vars.outputs.has_ssh }}" = "true" ] && [ -n "$SSH_AUTH_SOCK" ]; then
             SSH_ARG="--ssh default=$SSH_AUTH_SOCK"
+            echo "使用SSH代理进行构建"
+          else
+            echo "未使用SSH代理进行构建"
           fi
           
           # 阿里云ACR镜像名称（如果配置了）
