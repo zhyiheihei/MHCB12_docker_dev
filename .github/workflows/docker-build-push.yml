@@ -45,8 +45,38 @@ jobs:
             echo "push_latest=false" >> $GITHUB_OUTPUT
           fi
 
-      # 配置 SSH 代理用于私有仓库克隆
+      # 校验必要的 Secrets/Variables，缺少则失败并给出清晰提示
+      - name: Validate required secrets and variables
+        run: |
+          MISSING=false
+          if [ -z "${{ secrets.SSH_PRIVATE_KEY }}" ]; then
+            echo "::error::Secret SSH_PRIVATE_KEY is not set. Add it in Settings > Secrets and variables > Actions."
+            MISSING=true
+          fi
+          if [ -z "${{ secrets.DOCKER_PASSWORD }}" ]; then
+            echo "::error::Secret DOCKER_PASSWORD is not set. Add Docker Hub access token as DOCKER_PASSWORD."
+            MISSING=true
+          fi
+          if [ -z "${{ secrets.ALIYUN_ACR_PASSWORD }}" ]; then
+            echo "::warning::Secret ALIYUN_ACR_PASSWORD is not set. If you push to Aliyun ACR, you must set it."
+            MISSING=true
+          fi
+          if [ -z "${{ vars.DOCKER_USERNAME }}" ]; then
+            echo "::error::Variable DOCKER_USERNAME is not set. Add it in Settings > Secrets and variables > Variables."
+            MISSING=true
+          fi
+          if [ -z "${{ vars.DOCKER_IMAGE_NAME }}" ]; then
+            echo "::error::Variable DOCKER_IMAGE_NAME is not set."
+            MISSING=true
+          fi
+          if [ "$MISSING" = "true" ]; then
+            echo "One or more required secrets/variables are missing. See errors above."
+            exit 1
+          fi
+
+      # 配置 SSH 代理用于私有仓库克隆（仅当 SSH_PRIVATE_KEY 存在时执行）
       - name: Setup SSH Agent
+        if: ${{ secrets.SSH_PRIVATE_KEY != '' }}
         uses: webfactory/ssh-agent@v0.8.0
         with:
           ssh-private-key: ${{ secrets.SSH_PRIVATE_KEY }}

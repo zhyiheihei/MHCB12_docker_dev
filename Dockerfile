@@ -1,7 +1,7 @@
 # 第一阶段：构建环境
 FROM library/ubuntu:22.04 AS builder
 
-ARG REPO_URL=git@codeup.aliyun.com:dooya/MHCB12.git
+ARG REPO_URL=git@codeup.aliyun.com:dooya/mhcb12g_demo.git
 
 # 一次性安装所有必要工具并清理
 RUN apt-get update && \
