@@ -1,0 +1,90 @@
+name: Build and Push Docker Image
+
+on:
+  push:
+    branches: [ main, master ]  # 明确指定触发分支
+  release:
+    types: [published]  # 只监听发布事件
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest  # 使用 GitHub 提供的 runner
+    
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Determine Docker tags
+        id: determine-tags
+        run: |
+          # 判断事件类型
+          if [ "${{ github.event_name }}" = "release" ]; then
+            # Release事件 - 使用release版本号
+            TAG_NAME=${GITHUB_REF#refs/tags/}
+            echo "::notice::Building RELEASE version: $TAG_NAME"
+            echo "tag_name=$TAG_NAME" >> $GITHUB_OUTPUT
+            echo "additional_tags=latest" >> $GITHUB_OUTPUT
+          else
+            # Push事件 - 只使用latest标签
+            echo "::notice::Building DEV version with latest tag"
+            echo "tag_name=latest" >> $GITHUB_OUTPUT
+            echo "additional_tags=" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Setup SSH Agent
+        uses: webfactory/ssh-agent@v0.8.0
+        with:
+          ssh-private-key: ${{ secrets.SSH_PRIVATE_KEY }}
+
+      - name: Build Docker Image
+        run: |
+          # 定义镜像标签
+          LOCAL_IMAGE=${{ vars.DOCKER_USERNAME }}/${{ vars.DOCKER_IMAGE_NAME }}
+          ACR_IMAGE=registry.cn-hangzhou.aliyuncs.com/${{ vars.ALIYUN_ACR_NAMESPACE }}/${{ vars.DOCKER_IMAGE_NAME }}
+
+          # 构建主标签
+          docker build \
+            --ssh default=$SSH_AUTH_SOCK \
+            --build-arg REPO_URL="git@codeup.aliyun.com:dooya/MHCB12.git" \
+            -t $LOCAL_IMAGE:${{ steps.determine-tags.outputs.tag_name }} \
+            -t $ACR_IMAGE:${{ steps.determine-tags.outputs.tag_name }} \
+            .
+
+          # 如果有额外标签（如release时的latest标签）
+          if [ -n "${{ steps.determine-tags.outputs.additional_tags }}" ]; then
+            docker tag $LOCAL_IMAGE:${{ steps.determine-tags.outputs.tag_name }} $LOCAL_IMAGE:latest
+            docker tag $ACR_IMAGE:${{ steps.determine-tags.outputs.tag_name }} $ACR_IMAGE:latest
+          fi
+
+      - name: Login to Docker Hub
+        uses: docker/login-action@v2
+        with:
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_PASSWORD }}
+
+      - name: Push to Docker Hub
+        run: |
+          # 推送版本标签
+          docker push ${{ vars.DOCKER_USERNAME }}/${{ vars.DOCKER_IMAGE_NAME }}:${{ steps.determine-tags.outputs.tag_name }}
+          
+          # 如果是版本发布，推送 latest
+          if [ "${{ steps.determine-tags.outputs.tag_name }}" != "latest" ]; then
+            docker push ${{ vars.DOCKER_USERNAME }}/${{ vars.DOCKER_IMAGE_NAME }}:latest
+          fi
+
+      - name: Login to Aliyun ACR
+        uses: docker/login-action@v2
+        with:
+          registry: registry.cn-hangzhou.aliyuncs.com
+          username: ${{ secrets.ALIYUN_ACR_USERNAME }}
+          password: ${{ secrets.ALIYUN_ACR_PASSWORD }}
+
+      - name: Push to Aliyun ACR
+        run: |
+          ACR_IMAGE=registry.cn-hangzhou.aliyuncs.com/${{ vars.ALIYUN_ACR_NAMESPACE }}/${{ vars.DOCKER_IMAGE_NAME }}
+          docker push $ACR_IMAGE:${{ steps.determine-tags.outputs.tag_name }}
+          
+          # 推送额外标签
+          if [ -n "${{ steps.determine-tags.outputs.additional_tags }}" ]; then
+            docker push $ACR_IMAGE:latest
+          fi
