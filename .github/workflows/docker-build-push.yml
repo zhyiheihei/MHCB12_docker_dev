@@ -74,9 +74,8 @@ jobs:
             exit 1
           fi
 
-      # 配置 SSH 代理用于私有仓库克隆（仅当 SSH_PRIVATE_KEY 存在时执行）
+      # 配置 SSH 代理用于私有仓库克隆（移除直接引用 secrets 的 step if，依赖上面的校验）
       - name: Setup SSH Agent
-        if: ${{ secrets.SSH_PRIVATE_KEY != '' }}
         uses: webfactory/ssh-agent@v0.8.0
         with:
           ssh-private-key: ${{ secrets.SSH_PRIVATE_KEY }}
